@@ -20,6 +20,8 @@ users_path = os.path.join("other", "users.db")  # путь к базе данн�
 setback_number = 2  # количество часов, которое проходит после полуночи, прежде чем бот считает, что наступил
 setback = timedelta(hours=setback_number)  # новый день
 
+amount_of_suggested_buses = 4
+
 days_by_number = {
     5: "saturday",
     6: "sunday"
@@ -257,21 +259,29 @@ def get_users():
 
     users = []
     for row in cur.fetchall():
+        user = row[0]
         users.append(row[0])
     print(users)
 
     return users
 
 
-def update_users(user_id):
+def update_users(user_id, delete=False):
     con = sqlite3.connect(users_path)
     cur = con.cursor()
 
     cur.execute("SELECT user_id FROM users where user_id = ?", (user_id,))
-    if not cur.fetchall():
-        cur.execute("INSERT INTO users VALUES (?)", (user_id,))
-        con.commit()
-        logging.error(f"New user: {user_id}")
+    if not delete:
+        if not cur.fetchall():
+            cur.execute("INSERT INTO users VALUES (?)", (user_id,))
+            con.commit()
+            logging.error(f"New user: {user_id}.")
+
+    else:
+        if cur.fetchall():
+            cur.execute("DELETE FROM users WHERE user_id = (?)", (user_id,))
+            con.commit()
+            logging.error(f"User {user_id} has blocked the bot and has been deleted from the database.")
 
 
 def can_be_hour(number):
@@ -358,7 +368,7 @@ def place_choice_markup():
     return markup
 
 
-@bot.message_handler(commands=["hello", "help"])
+@bot.message_handler(commands=["hello", "start", "help"])
 def hello(message):
     greetings = [
         "Используй команды /next или /now, чтобы получить список ближайших автобусов.",
@@ -376,15 +386,17 @@ def hello(message):
         "Если я веду себя неадекватно или у тебя есть вопросы или предложения, не стесняйся использовать команду "
         "/report, чтобы сообщить о проблеме."
     ]
-
-    if message.text == "/hello":
-        bot.send_message(message.chat.id, "Привет! Я буду присылать тебе актуальное расписание автобусов от и до "
-                                          "Дубковского общежития московской Вышки.")
-    for greeting in greetings:
-        bot.send_message(message.chat.id, greeting, parse_mode="Markdown")
-    if message.text == "/hello":
-        bot.send_message(message.chat.id, "Попробуй найти ближайший автобус: нажми /next :)")
-        update_users(user_id=message.chat.id)
+    try:
+        if message.text in ["/hello", "/start"]:
+            bot.send_message(message.chat.id, "Привет! Я буду присылать тебе актуальное расписание автобусов от и до "
+                                              "Дубковского общежития московской Вышки.")
+        for greeting in greetings:
+            bot.send_message(message.chat.id, greeting, parse_mode="Markdown")
+        if message.text in ["/hello", "/start"]:
+            bot.send_message(message.chat.id, "Попробуй найти ближайший автобус: нажми /next :)")
+            update_users(user_id=message.chat.id)
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 @bot.message_handler(commands=["report"])
@@ -394,22 +406,30 @@ def report(message):
     b = types.KeyboardButton("Расписание")
     c = types.KeyboardButton("Другое")
     markup.row(a, b, c)
-    msg = bot.send_message(message.chat.id, "С чем именно проблема?", reply_markup=markup, parse_mode="Markdown")
-    bot.register_next_step_handler(msg, write_report)
+    try:
+        msg = bot.send_message(message.chat.id, "С чем именно проблема?", reply_markup=markup, parse_mode="Markdown")
+        bot.register_next_step_handler(msg, write_report)
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 def write_report(message):
     topic = message.text
-    msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.", reply_markup=types.ReplyKeyboardRemove())
-    bot.register_next_step_handler(msg, send_report, topic)
+    try:
+        msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.", reply_markup=types.ReplyKeyboardRemove())
+        bot.register_next_step_handler(msg, send_report, topic)
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 def send_report(message, topic):
     bot.send_message(conf.DEVELOPER_ID, f"REPORT #report #{topic}. Отвечайте с помощью /answer",
                      parse_mode="Markdown")
     bot.forward_message(conf.DEVELOPER_ID, message.chat.id, message.message_id)
-
-    bot.send_message(message.chat.id, "Спасибо! Посмотрю, что можно сделать, подумаю и постараюсь ответить.")
+    try:
+        bot.send_message(message.chat.id, "Спасибо! Посмотрю, что можно сделать, подумаю и постараюсь ответить.")
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 @bot.message_handler(commands=["answer"])
@@ -423,9 +443,16 @@ def answer_report(message):
 
 
 def write_answer_report(reply):
-    if hasattr(reply.reply_to_message, 'text'):
-        report_message = reply.reply_to_message
+    if hasattr(reply.reply_to_message, "text"):
+        if hasattr(reply.reply_to_message, "forward_from"):
+            report_message = reply.reply_to_message
+        else:
+            logging.error("Your answer to a report has no 'reply_to_message.forward_from' attribute.")
+            logging.error(reply.reply_to_message.forward_from)
+            return
     else:
+        logging.error("Your answer to a report has no 'reply_to_message' attribute.")
+        logging.error(reply.reply_to_message.forward_from)
         return
 
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -439,8 +466,13 @@ def write_answer_report(reply):
 
 def confirm_answer_report(confirmation, reply, report_message):
     if confirmation.text == "Да":
-        bot.send_message(report_message.chat.id, f"Помнится, ты мне написал(а) следующее:\n{report_message.text}")
-        bot.send_message(report_message.chat.id, f"Так вот, отвечаю:\n{reply.text}")
+        try:
+            bot.send_message(report_message.forward_from.id,
+                             f"Помнится, ты мне написал(а) следующее:\n{report_message.text}")
+            bot.send_message(report_message.forward_from.id, f"Так вот, отвечаю:\n{reply.text}")
+        except telebot.apihelper.ApiException:
+            update_users(user_id=report_message.chat.id, delete=True)
+            return
 
         bot.send_message(reply.chat.id, "Ответ отправлен.",
                          reply_markup=types.ReplyKeyboardRemove())
@@ -473,7 +505,10 @@ def confirm_announcement(confirmation, announcement):
         users = get_users()
 
         for user_id in users:
-            bot.send_message(user_id, announcement.text)
+            try:
+                bot.send_message(user_id, announcement.text)
+            except telebot.apihelper.ApiException:
+                update_users(user_id=user_id, delete=True)
         bot.send_message(announcement.chat.id, f"Объявление отправлено {len(users)} пользователям.",
                          reply_markup=types.ReplyKeyboardRemove())
     else:
@@ -482,15 +517,21 @@ def confirm_announcement(confirmation, announcement):
 
 @bot.message_handler(commands=["pdf"])
 def send_pdf(message):
-    with open(pdf_path, "rb") as f:
-        bot.send_document(message.chat.id, f)
+    try:
+        with open(pdf_path, "rb") as f:
+            bot.send_document(message.chat.id, f)
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 @bot.message_handler(commands=["next", "now"])
 def get_next_bus_place(message, day=False, time=False):
     markup = place_choice_markup()
-    msg = bot.send_message(message.chat.id, "Откуда едем?", reply_markup=markup, parse_mode="Markdown")
-    bot.register_next_step_handler(msg, process_set_time, day=day, time=time)
+    try:
+        msg = bot.send_message(message.chat.id, "Откуда едем?", reply_markup=markup, parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_set_time, day=day, time=time)
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
 
 
 @bot.message_handler(content_types=["text"])
@@ -499,9 +540,12 @@ def process_set_time(message, place=False, day=False, time=False):
 
     if len(pieces) > 20 or len(message.text) > 60:
         logging.error("Request too big!")
-        bot.send_message(message.chat.id, "Лев Николаевич, не пишите больше сюда, пожалуйста. "
-                                          "Здесь нужны короткие и ёмкие запросы. Я понимаю, у нас тут Дубки, "
-                                          "вам это близко… Но надо знать меру.")
+        try:
+            bot.send_message(message.chat.id, "Лев Николаевич, не пишите больше сюда, пожалуйста. "
+                                              "Здесь нужны короткие и ёмкие запросы. Я понимаю, у нас тут Дубки, "
+                                              "вам это близко… Но надо знать меру.")
+        except telebot.apihelper.ApiException:
+            update_users(user_id=message.chat.id, delete=True)
         return
 
     now, today = define_time()
@@ -608,7 +652,10 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
         time = define_time()[0]
 
     if not can_be_time(nullize(time)):
-        bot.send_message(message.chat.id, time)
+        try:
+            bot.send_message(message.chat.id, time)
+        except telebot.apihelper.ApiException:
+            update_users(user_id=message.chat.id, delete=True)
         return
 
     if place not in places_list:
@@ -620,32 +667,48 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
         for bus in schedule[day][place]:
             if bus > time:
                 suggested_buses.append(nullize(bus))
-            if len(suggested_buses) > 4:
+            if len(suggested_buses) > amount_of_suggested_buses - 1:
                 break
 
         if schedule_out_of_date:
-            bot.send_message(message.chat.id, "*Осторожно! Это расписание может быть устаревшим.*\n"
-                                              "Свежее расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
-                             parse_mode="Markdown")
+            try:
+                bot.send_message(message.chat.id, "*Осторожно! Это расписание может быть устаревшим.*\nСвежее "
+                                                  "расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
+                                 parse_mode="Markdown")
+            except telebot.apihelper.ApiException:
+                update_users(user_id=message.chat.id, delete=True)
+                return
 
         if not schedule[day][place]:
-            bot.send_message(message.chat.id, f"К сожалению, в {weekdays_rus_names_list[day]['acc']} "
-                                              f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
-                             reply_markup=types.ReplyKeyboardRemove())
+            try:
+                bot.send_message(message.chat.id, f"К сожалению, в {weekdays_rus_names_list[day]['acc']} "
+                                                  f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
+                                 reply_markup=types.ReplyKeyboardRemove())
+            except telebot.apihelper.ApiException:
+                update_users(user_id=message.chat.id, delete=True)
             return
         if not suggested_buses:
-            bot.send_message(message.chat.id, f"К сожалению, в это время в {weekdays_rus_names_list[day]['acc']} "
-                                              f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
-                             reply_markup=types.ReplyKeyboardRemove())
+            try:
+                bot.send_message(message.chat.id, f"К сожалению, в это время в {weekdays_rus_names_list[day]['acc']} "
+                                                  f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
+                                 reply_markup=types.ReplyKeyboardRemove())
+            except telebot.apihelper.ApiException:
+                update_users(user_id=message.chat.id, delete=True)
             return
 
         if not reply:
             logging.error(f"Something wrong with reply message: {reply}. Original message: {message.text}")
         else:
-            bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+            try:
+                bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+            except telebot.apihelper.ApiException:
+                update_users(user_id=message.chat.id, delete=True)
 
-        bot.send_message(message.chat.id, markdownize_suggested(suggested_buses),
-                         reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        try:
+            bot.send_message(message.chat.id, markdownize_suggested(suggested_buses),
+                             reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        except telebot.apihelper.ApiException:
+            update_users(user_id=message.chat.id, delete=True)
 
 
 if __name__ == '__main__':
