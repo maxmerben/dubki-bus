@@ -12,13 +12,13 @@ update_necessary = False  # если True, то загрузит расписа�
 
 bot = telebot.TeleBot(conf.TOKEN)
 
-sched_path = os.path.join("sched", "sched.txt")
-database_path = os.path.join("sched", "sched.db")
-pdf_path = os.path.join("sched", "sched.pdf")
-users_path = os.path.join("other", "users.db")
+sched_path = os.path.join("sched", "sched.txt")  # путь к txt-файлу с расписанием
+database_path = os.path.join("sched", "sched.db")  # путь к базе данных с расписанием
+pdf_path = os.path.join("sched", "sched.pdf")  # путь к pdf-файлу с расписанием
+users_path = os.path.join("other", "users.db")  # путь к базе данных со списком пользователей
 
-setback_number = 2
-setback = timedelta(hours=setback_number)
+setback_number = 2  # количество часов, которое проходит после полуночи, прежде чем бот считает, что наступил
+setback = timedelta(hours=setback_number)  # новый день
 
 days_by_number = {
     5: "saturday",
@@ -109,9 +109,9 @@ def nullize(bus):
         return bus
 
     hour = str(int(bus[:bus.find(":")]) % 24)
-    min = bus[bus.find(":") + 1:]
+    minutes = bus[bus.find(":") + 1:]
 
-    return numify(f"{hour}:{min}")
+    return numify(f"{hour}:{minutes}")
 
 
 def denullize(bus):
@@ -119,12 +119,12 @@ def denullize(bus):
         return bus
 
     hour = bus[:bus.find(":")]
-    min = bus[bus.find(":") + 1:]
+    minutes = bus[bus.find(":") + 1:]
 
     if int(hour) < setback_number:
         hour = str(int(hour) + 24)
 
-    return numify(f"{hour}:{min}")
+    return numify(f"{hour}:{minutes}")
 
 
 def sort_schedule(schedule):
@@ -289,19 +289,19 @@ def can_be_hour(number):
 
 def can_be_time(bus):
     hour = bus[:bus.find(":")]
-    min = bus[bus.find(":") + 1:]
+    minutes = bus[bus.find(":") + 1:]
 
     if not can_be_hour(hour):
         return False
 
     try:
-        min = int(min)
+        minutes = int(minutes)
     except ValueError:
         return False
 
-    if min < 0:
+    if minutes < 0:
         return False
-    if min > 59:
+    if minutes > 59:
         return False
 
     return True
@@ -309,22 +309,22 @@ def can_be_time(bus):
 
 def numify(bus):
     hour = bus[:bus.find(":")]
-    min = bus[bus.find(":") + 1:]
+    minutes = bus[bus.find(":") + 1:]
 
     try:
         hour = str(int(hour))
-        min_cleaned = min
+        min_cleaned = minutes
         if min_cleaned.find("(") > -1:
             min_cleaned = min_cleaned[:min_cleaned.find(" (")]
-        min_cleaned = str(int(min_cleaned))
+        str(int(min_cleaned))
     except ValueError:
         logging.error(f"Something wrong with time: {bus}!")
 
     while len(hour) < 2:
         hour = f"0{hour}"
-    while len(min) < 2:
-        min = f"0{min}"
-    return f"{hour}:{min}"
+    while len(minutes) < 2:
+        minutes = f"0{minutes}"
+    return f"{hour}:{minutes}"
 
 
 def define_time():
@@ -350,10 +350,9 @@ def code_place(message):
 
 def place_choice_markup():
     markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
-    btn = {}
-    btn["dub"] = types.KeyboardButton(places_rus_names_list["dub"]["nom"])
-    btn["odi"] = types.KeyboardButton(places_rus_names_list["odi"]["nom"])
-    btn["slav"] = types.KeyboardButton(places_rus_names_list["slav"]["nom"])
+    btn = {"dub": types.KeyboardButton(places_rus_names_list["dub"]["nom"]),
+           "odi": types.KeyboardButton(places_rus_names_list["odi"]["nom"]),
+           "slav": types.KeyboardButton(places_rus_names_list["slav"]["nom"])}
     markup.row(btn["dub"], btn["odi"], btn["slav"])
     return markup
 
@@ -400,8 +399,7 @@ def report(message):
 
 def write_report(message):
     topic = message.text
-    msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.",
-                     reply_markup=types.ReplyKeyboardRemove())
+    msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.", reply_markup=types.ReplyKeyboardRemove())
     bot.register_next_step_handler(msg, send_report, topic)
 
 
@@ -415,7 +413,6 @@ def send_report(message, topic):
 
 @bot.message_handler(commands=["answer"])
 def answer_report(message):
-
     if message.chat.id != conf.DEVELOPER_ID:
         bot.send_message(message.chat.id, "Эта команда доступна только разработчикам.")
         return
@@ -445,14 +442,13 @@ def confirm_answer_report(confirmation, reply, report_message):
         bot.send_message(report_message.chat.id, f"Так вот, отвечаю:\n{reply.text}")
 
         bot.send_message(reply.chat.id, "Ответ отправлен.",
-                     reply_markup=types.ReplyKeyboardRemove())
+                         reply_markup=types.ReplyKeyboardRemove())
     else:
         return
 
 
 @bot.message_handler(commands=["announce"])
 def announce(message):
-
     if message.chat.id != conf.DEVELOPER_ID:
         bot.send_message(message.chat.id, "Эта команда доступна только разработчикам.")
         return
@@ -462,7 +458,6 @@ def announce(message):
 
 
 def write_announcement(announcement):
-
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     a = types.KeyboardButton("Да")
     b = types.KeyboardButton("Нет")
@@ -473,7 +468,6 @@ def write_announcement(announcement):
 
 
 def confirm_announcement(confirmation, announcement):
-
     if confirmation.text == "Да":
         users = get_users()
 
@@ -487,7 +481,6 @@ def confirm_announcement(confirmation, announcement):
 
 @bot.message_handler(commands=["pdf"])
 def send_pdf(message):
-
     with open(pdf_path, "rb") as f:
         bot.send_document(message.chat.id, f)
 
@@ -617,7 +610,7 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
         bot.send_message(message.chat.id, time)
         return
 
-    if not place in places_list:
+    if place not in places_list:
         get_next_bus_place(message, day, time)
 
     else:
