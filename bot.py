@@ -7,11 +7,10 @@ import os
 from datetime import datetime, timedelta
 import logging
 import time
+from flask import Flask, request
 
 schedule_out_of_date = False  # если True, то будет выдавать предупреждение пользователю, что расписание устарело
 update_necessary = False  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
-
-bot = telebot.TeleBot(conf.TOKEN)
 
 logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s", level="INFO",
                     filename="log.txt", encoding="utf-8")
@@ -29,6 +28,9 @@ setback_number = 2  # количество часов, которое прохо
 setback = timedelta(hours=setback_number)  # новый день
 
 amount_of_suggested_buses = 4
+
+bot = telebot.TeleBot(conf.TOKEN)
+
 
 days_by_number = {
     5: "saturday",
@@ -409,7 +411,7 @@ def hello(message):
     ]
     if message.text in ["/hello", "/start"]:
         send(message.chat.id, "Привет! Я буду присылать тебе актуальное расписание автобусов от и до "
-                                "Дубковского общежития московской Вышки.")
+                              "Дубковского общежития московской Вышки.")
     for greeting in greetings:
         send(message.chat.id, greeting, parse_mode="Markdown")
     if message.text in ["/hello", "/start"]:
@@ -521,7 +523,7 @@ def confirm_announcement(confirmation, announcement):
         for user_id in users:
             send(user_id, announcement.text)
         send(announcement.chat.id, f"Объявление отправлено {len(users)} пользователям.",
-                         reply_markup=types.ReplyKeyboardRemove())
+             reply_markup=types.ReplyKeyboardRemove())
     else:
         return
 
@@ -681,8 +683,8 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
 
         if schedule_out_of_date:
             msg = send(message.chat.id, "*Осторожно! Это расписание может быть устаревшим.*\nСвежее "
-                                                  "расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
-                                 parse_mode="Markdown")
+                                        "расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
+                       parse_mode="Markdown")
             if not msg:
                 return
 
@@ -720,4 +722,25 @@ if __name__ == "__main__":
     else:
         schedule = get_database()
     print(schedule)
-    bot.polling(none_stop=True)
+
+    if "HEROKU" in list(os.environ.keys()):
+
+        server = Flask(__name__)
+
+        @server.route("/bot", methods=['POST'])
+        def getMessage():
+            bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+            return "!", 200
+
+        @server.route("/")
+        def webhook():
+            bot.remove_webhook()
+            bot.set_webhook(
+                url="https://min-gallows.herokuapp.com/bot")  # этот url нужно заменить на url вашего Хероку приложения
+            return "?", 200
+
+        server.run(host="0.0.0.0", port=os.environ.get('PORT', 80))
+
+    else:
+        bot.remove_webhook()
+        bot.polling(none_stop=True)
