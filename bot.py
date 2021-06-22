@@ -22,6 +22,8 @@ formatter = logging.Formatter(u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]
 handler.setFormatter(formatter)
 root_logger.addHandler(handler)
 
+os.chdir(os.path.dirname(os.path.realpath(__file__)))
+
 sched_path = os.path.join("sched", "sched.txt")  # путь к txt-файлу с расписанием
 database_path = os.path.join("sched", "sched.db")  # путь к базе данных с расписанием
 pdf_path = os.path.join("sched", "sched.pdf")  # путь к pdf-файлу с расписанием
@@ -29,6 +31,9 @@ users_path = os.path.join("other", "users.db")  # путь к базе данн�
 
 setback_number = 2  # количество часов, которое проходит после полуночи, прежде чем бот считает, что наступил
 setback = timedelta(hours=setback_number)  # новый день
+
+timezone_number = 3  # UTC
+timezone = timedelta(hours=timezone_number)
 
 amount_of_suggested_buses = 4
 
@@ -229,8 +234,8 @@ def update_database(schedule):
     cur.execute("""
     CREATE TABLE schedule (
         bus_id INT,
-        day TEXT, 
-        place TEXT, 
+        day TEXT,
+        place TEXT,
         bus TEXT,
         PRIMARY KEY (bus_id)
     )
@@ -372,8 +377,12 @@ def numify(bus):
     return f"{hour}:{minutes}"
 
 
+def catch_time():
+    return datetime.utcnow() + timezone
+
+
 def define_time():
-    moment = datetime.now() - setback
+    moment = catch_time() - setback
     hour = moment.hour + setback_number
     time = numify(f"{hour}:{moment.minute}")
 
@@ -601,9 +610,9 @@ def process_set_time(message, place=False, day=False, time=False):
 
         if piece.lower() in ["завтра", "tomorrow", "послезавтра"]:
             if piece.lower() == "послезавтра":
-                tomorrow = (datetime.now().weekday() + 2) % 7
+                tomorrow = (catch_time().weekday() + 2) % 7
             else:
-                tomorrow = (datetime.now().weekday() + 1) % 7
+                tomorrow = (catch_time().weekday() + 1) % 7
             if tomorrow in days_by_number:
                 day = days_by_number[tomorrow]
             else:
