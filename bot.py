@@ -638,8 +638,9 @@ def process_set_time(message, place=False, day=False, time=False):
 
 def markdownize_suggested(suggested_buses):
     suggested_buses = " | ".join(suggested_buses)
-    if suggested_buses.find('|') > -1:
-        return f"*{suggested_buses[:suggested_buses.find('|')]}*`{suggested_buses[suggested_buses.find('|'):]}`"
+    x = suggested_buses.find('|')
+    if x > -1:
+        return f"*{suggested_buses[:x]}*`{suggested_buses[x:]}`"
     return f"*{suggested_buses}*"
 
 
@@ -711,7 +712,17 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
             update_users(user_id=message.chat.id, delete=True)
 
 
-if __name__ == '__main__':
+@bot.message_handler(func=lambda message: True, content_types=["audio", "document", "photo", "sticker", "video",
+                                                               "video_note", "voice", "location", "contact"])
+def handle_types(message):
+    try:
+        bot.send_message(message.chat.id, "Увы, пока что я не знаю, как на такое реагировать.",
+                         reply_markup=types.ReplyKeyboardRemove())
+    except telebot.apihelper.ApiException:
+        update_users(user_id=message.chat.id, delete=True)
+
+
+if __name__ == "__main__":
     if update_necessary:
         schedule = update_schedule()
     else:
