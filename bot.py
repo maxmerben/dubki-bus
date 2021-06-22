@@ -99,6 +99,14 @@ weekdays_names_list = {
     "буд": "weekday"
 }
 
+logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s", level="INFO",
+                    filename="log.txt")
+logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s", level="ERROR",
+                    filename="log.txt")
+logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s",
+                    level="WARNING", filename="log.txt")
+
+
 
 def odd(number):
     if number % 2 == 0:
@@ -151,7 +159,7 @@ def at_arrival(row):
     for i in range(len(row)):
         if row[i] == "по_прибытию":
             if not odd(i):
-                logging.error(f"Something wrong with «по прибытию»! This row has «по прибытию» in even columns: {row}.")
+                logging.error(f"Some row has «по прибытию» in even columns: {row}.")
             else:
                 row[i] = f"{row[i - 1]} (по приб.)"
 
@@ -259,7 +267,6 @@ def get_users():
 
     users = []
     for row in cur.fetchall():
-        user = row[0]
         users.append(row[0])
     print(users)
 
@@ -275,13 +282,13 @@ def update_users(user_id, delete=False):
         if not cur.fetchall():
             cur.execute("INSERT INTO users VALUES (?)", (user_id,))
             con.commit()
-            logging.error(f"New user: {user_id}.")
+            logging.info(f"New user: {user_id}.")
 
     else:
         if cur.fetchall():
             cur.execute("DELETE FROM users WHERE user_id = (?)", (user_id,))
             con.commit()
-            logging.error(f"User {user_id} has blocked the bot and has been deleted from the database.")
+            logging.info(f"User {user_id} has blocked the bot and has been deleted from the database.")
 
 
 def can_be_hour(number):
@@ -329,7 +336,7 @@ def numify(bus):
             min_cleaned = min_cleaned[:min_cleaned.find(" (")]
         str(int(min_cleaned))
     except ValueError:
-        logging.error(f"Something wrong with time: {bus}!")
+        logging.warning(f"Something wrong with time: {bus}!")
 
     while len(hour) < 2:
         hour = f"0{hour}"
@@ -414,7 +421,9 @@ def report(message):
 
 
 def write_report(message):
+
     topic = message.text
+
     try:
         msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.", reply_markup=types.ReplyKeyboardRemove())
         bot.register_next_step_handler(msg, send_report, topic)
@@ -423,6 +432,7 @@ def write_report(message):
 
 
 def send_report(message, topic):
+
     bot.send_message(conf.DEVELOPER_ID, f"REPORT #report #{topic}. Отвечайте с помощью /answer",
                      parse_mode="Markdown")
     bot.forward_message(conf.DEVELOPER_ID, message.chat.id, message.message_id)
@@ -444,15 +454,16 @@ def answer_report(message):
 
 def write_answer_report(reply):
     if hasattr(reply.reply_to_message, "text"):
-        if hasattr(reply.reply_to_message, "forward_from"):
+        if hasattr(reply.reply_to_message, "forward_from") and reply.reply_to_message.forward_from:
             report_message = reply.reply_to_message
+            print(reply.reply_to_message)
         else:
             logging.error("Your answer to a report has no 'reply_to_message.forward_from' attribute.")
-            logging.error(reply.reply_to_message.forward_from)
+            bot.send_message(reply.chat.id, f"Нужно отправить ответ на пересланное сообщение.")
             return
     else:
         logging.error("Your answer to a report has no 'reply_to_message' attribute.")
-        logging.error(reply.reply_to_message.forward_from)
+        bot.send_message(reply.chat.id, f"Нужно отправить ответ на пересланное сообщение.")
         return
 
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -539,7 +550,7 @@ def process_set_time(message, place=False, day=False, time=False):
     pieces = message.text.split(" ")
 
     if len(pieces) > 20 or len(message.text) > 60:
-        logging.error("Request too big!")
+        logging.info("Request too big!")
         try:
             bot.send_message(message.chat.id, "Лев Николаевич, не пишите больше сюда, пожалуйста. "
                                               "Здесь нужны короткие и ёмкие запросы. Я понимаю, у нас тут Дубки, "
@@ -591,7 +602,7 @@ def process_set_time(message, place=False, day=False, time=False):
         if not time:
             if ":" in piece or "." in piece:  # defining time
                 if not can_be_time(piece):
-                    logging.error(f"Such time doesn't exist: {piece}!")
+                    logging.info(f"Such time doesn't exist: {piece}!")
                     time = "Вот в такое время автобусов точно не бывает."
                     continue
                 time = denullize(numify(piece))
@@ -613,7 +624,7 @@ def process_set_time(message, place=False, day=False, time=False):
         reply = ""
 
         if not place:
-            logging.error(f"Place was not given: {message.text}!")
+            logging.info(f"Place was not given: {message.text}!")
             place = "Place was not given"
         else:
 
@@ -624,7 +635,7 @@ def process_set_time(message, place=False, day=False, time=False):
 
             if bad_pieces:
                 reply = reply + f"Я не знаю, что такое `{', '.join(bad_pieces)}` :(\n"
-                logging.error(f"Unknown tokens in the message: {', '.join(bad_pieces)}!")
+                logging.info(f"Unknown tokens in the message: {', '.join(bad_pieces)}!")
 
             if place:
                 if day == today and time == now:
@@ -698,7 +709,7 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
             return
 
         if not reply:
-            logging.error(f"Something wrong with reply message: {reply}. Original message: {message.text}")
+            logging.warning(f"Something wrong with reply message: {reply}. Original message: {message.text}")
         else:
             try:
                 bot.send_message(message.chat.id, reply, parse_mode="Markdown")
