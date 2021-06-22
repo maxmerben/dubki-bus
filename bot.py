@@ -108,10 +108,7 @@ def nullize(bus):
     if bus.find(":") < 0:
         return bus
 
-    hour = bus[:bus.find(":")]
-    hour = int(hour)
-    hour = hour % 24
-    hour = str(hour)
+    hour = str(int(bus[:bus.find(":")]) % 24)
     min = bus[bus.find(":") + 1:]
 
     return numify(f"{hour}:{min}")
