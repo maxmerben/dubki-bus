@@ -5,14 +5,17 @@ import csv
 import sqlite3
 import os
 from datetime import datetime, timedelta
-import pandas as pd
 import logging
 
-schedule_out_of_date = False
+schedule_out_of_date = False  # если True, то будет выдавать предупреждение пользователю, что расписание устарело
+update_necessary = False  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
 
 bot = telebot.TeleBot(conf.TOKEN)
 
 sched_path = os.path.join("sched", "sched.txt")
+database_path = os.path.join("sched", "sched.db")
+pdf_path = os.path.join("sched", "sched.pdf")
+users_path = os.path.join("other", "users.db")
 
 setback_number = 2
 setback = timedelta(hours=setback_number)
@@ -102,13 +105,22 @@ def odd(number):
 
 
 def nullize(bus):
-    hour = str(int(bus[:bus.find(":")]) % 24)
+    if bus.find(":") < 0:
+        return bus
+
+    hour = bus[:bus.find(":")]
+    hour = int(hour)
+    hour = hour % 24
+    hour = str(hour)
     min = bus[bus.find(":") + 1:]
 
     return numify(f"{hour}:{min}")
 
 
 def denullize(bus):
+    if bus.find(":") < 0:
+        return bus
+
     hour = bus[:bus.find(":")]
     min = bus[bus.find(":") + 1:]
 
@@ -145,7 +157,55 @@ def at_arrival(row):
                 row[i] = f"{row[i - 1]} (по приб.)"
 
 
-def update_schedule(sched_path):
+def get_database():
+    schedule = {}
+
+    con = sqlite3.connect(database_path)
+    cur = con.cursor()
+
+    cur.execute("""SELECT * FROM schedule""")
+
+    for i in range(1, len(cur.fetchall()) + 1):
+        cur.execute("SELECT * FROM schedule where bus_id = ?", (i,))
+        row = cur.fetchall()[0]
+
+        if not row[1] in schedule:
+            schedule[row[1]] = {}
+        if not row[2] in schedule[row[1]]:
+            schedule[row[1]][row[2]] = []
+        schedule[row[1]][row[2]].append(row[3])
+    return schedule
+
+
+def update_database(schedule):
+    restruct = []
+
+    i = 0
+    for day in schedule:
+        for place in schedule[day]:
+            for bus in schedule[day][place]:
+                i = i + 1
+                restruct.append((i, day, place, bus))
+
+    con = sqlite3.connect(database_path)
+    cur = con.cursor()
+
+    cur.execute("DROP TABLE IF EXISTS schedule")
+    cur.execute("""
+    CREATE TABLE schedule (
+        bus_id INT,
+        day TEXT, 
+        place TEXT, 
+        bus TEXT,
+        PRIMARY KEY (bus_id)
+    )
+    """)
+
+    cur.executemany("INSERT INTO schedule VALUES (?, ?, ?, ?)", restruct)
+    con.commit()
+
+
+def update_schedule():
     schedule = {}
     for day in days_list:
         schedule[day] = {}
@@ -189,8 +249,31 @@ def update_schedule(sched_path):
                         schedule[day][place].append(row[i])
 
     sort_schedule(schedule)
-
+    update_database(schedule)
     return schedule
+
+
+def get_users():
+    con = sqlite3.connect(users_path)
+    cur = con.cursor()
+    cur.execute("""SELECT user_id FROM users""")
+
+    users = []
+    for row in cur.fetchall():
+        users.append(row[0])
+    print(users)
+
+    return users
+
+
+def update_users(user_id):
+    con = sqlite3.connect(users_path)
+    cur = con.cursor()
+
+    cur.execute("SELECT user_id FROM users where user_id = ?", (user_id,))
+    if not cur.fetchall():
+        cur.execute("INSERT INTO users VALUES (?)", (user_id,))
+        con.commit()
 
 
 def can_be_hour(number):
@@ -269,7 +352,7 @@ def code_place(message):
 
 
 def place_choice_markup():
-    markup = types.ReplyKeyboardMarkup(row_width=3)
+    markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
     btn = {}
     btn["dub"] = types.KeyboardButton(places_rus_names_list["dub"]["nom"])
     btn["odi"] = types.KeyboardButton(places_rus_names_list["odi"]["nom"])
@@ -281,7 +364,6 @@ def place_choice_markup():
 @bot.message_handler(commands=["hello", "help"])
 def hello(message):
     greetings = [
-        "Привет! Я буду присылать тебе актуальное расписание автобусов от и до Дубковского общежития московской Вышки.",
         "Используй команды /next или /now, чтобы получить список ближайших автобусов.",
         "Ещё ты можешь написать простой запрос, состоящий из времени, дня недели и места отправления, типа "
         "`суббота дубки 14:00`, `оди 8 чт` или `славянка`, и я покажу расписание на нужное время и место. "
@@ -293,22 +375,135 @@ def hello(message):
         "Утренние рейсы от Одинцова «по прибытию» указаны по времени отправки от Дубков, с припиской. "
         "Например, рейс `08:07 (по приб.)` отправляется в Одинцово в 08:07, через некоторое время прибывает "
         "в Одинцово и по прибытию отъезжает обратно в Дубки.",
-        "Попробуй найти ближайший автобус: нажми /next :)"
+        "Если хочешь получить .pdf-файл с расписанием, просто напиши /pdf.",
+        "Если я веду себя неадекватно или у тебя есть вопросы или предложения, не стесняйся использовать команду "
+        "/report, чтобы сообщить о проблеме."
     ]
+
+    if message.text == "/hello":
+        bot.send_message(message.chat.id, "Привет! Я буду присылать тебе актуальное расписание автобусов от и до "
+                                          "Дубковского общежития московской Вышки.")
     for greeting in greetings:
         bot.send_message(message.chat.id, greeting, parse_mode="Markdown")
+    if message.text == "/hello":
+        bot.send_message(message.chat.id, "Попробуй найти ближайший автобус: нажми /next :)")
+        update_users(user_id=message.chat.id)
+
+
+@bot.message_handler(commands=["report"])
+def report(message):
+    markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
+    a = types.KeyboardButton("Бот")
+    b = types.KeyboardButton("Расписание")
+    c = types.KeyboardButton("Другое")
+    markup.row(a, b, c)
+    msg = bot.send_message(message.chat.id, "С чем именно проблема?", reply_markup=markup, parse_mode="Markdown")
+    bot.register_next_step_handler(msg, write_report)
+
+
+def write_report(message):
+    topic = message.text
+    msg = bot.send_message(message.chat.id, "Опиши проблему сообщением.",
+                     reply_markup=types.ReplyKeyboardRemove())
+    bot.register_next_step_handler(msg, send_report, topic)
+
+
+def send_report(message, topic):
+    bot.send_message(conf.DEVELOPER_ID, f"REPORT #report #{topic}. Отвечайте с помощью /answer",
+                     parse_mode="Markdown")
+    bot.forward_message(conf.DEVELOPER_ID, message.chat.id, message.message_id)
+
+    bot.send_message(message.chat.id, "Спасибо! Посмотрю, что можно сделать, подумаю и постараюсь ответить.")
+
+
+@bot.message_handler(commands=["answer"])
+def answer_report(message):
+
+    if message.chat.id != conf.DEVELOPER_ID:
+        bot.send_message(message.chat.id, "Эта команда доступна только разработчикам.")
+        return
+
+    msg = bot.send_message(message.chat.id, "На какое сообщение и как ответить?")
+    bot.register_next_step_handler(msg, write_answer_report)
+
+
+def write_answer_report(reply):
+    if hasattr(reply.reply_to_message, 'text'):
+        report_message = reply.reply_to_message
+    else:
+        return
+
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    a = types.KeyboardButton("Да")
+    b = types.KeyboardButton("Нет")
+    markup.row(a, b)
+
+    confirmation = bot.send_message(reply.chat.id, "Точно?", reply_markup=markup)
+    bot.register_next_step_handler(confirmation, confirm_answer_report, reply, report_message)
+
+
+def confirm_answer_report(confirmation, reply, report_message):
+    if confirmation.text == "Да":
+        bot.send_message(report_message.chat.id, f"Помнится, ты мне написал(а) следующее:\n{report_message.text}")
+        bot.send_message(report_message.chat.id, f"Так вот, отвечаю:\n{reply.text}")
+
+        bot.send_message(reply.chat.id, "Ответ отправлен.",
+                     reply_markup=types.ReplyKeyboardRemove())
+    else:
+        return
+
+
+@bot.message_handler(commands=["announce"])
+def announce(message):
+
+    if message.chat.id != conf.DEVELOPER_ID:
+        bot.send_message(message.chat.id, "Эта команда доступна только разработчикам.")
+        return
+
+    msg = bot.send_message(message.chat.id, "Какое объявление отправить всем пользователям?")
+    bot.register_next_step_handler(msg, write_announcement)
+
+
+def write_announcement(announcement):
+
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    a = types.KeyboardButton("Да")
+    b = types.KeyboardButton("Нет")
+    markup.row(a, b)
+
+    confirmation = bot.send_message(announcement.chat.id, "Точно?", reply_markup=markup)
+    bot.register_next_step_handler(confirmation, confirm_announcement, announcement)
+
+
+def confirm_announcement(confirmation, announcement):
+
+    if confirmation.text == "Да":
+        users = get_users()
+
+        for user_id in users:
+            bot.send_message(user_id, announcement.text)
+        bot.send_message(announcement.chat.id, f"Объявление отправлено {len(users)} пользователям.",
+                         reply_markup=types.ReplyKeyboardRemove())
+    else:
+        return
+
+
+@bot.message_handler(commands=["pdf"])
+def send_pdf(message):
+
+    with open(pdf_path, "rb") as f:
+        bot.send_document(message.chat.id, f)
 
 
 @bot.message_handler(commands=["next", "now"])
-def get_next_bus_place(message, weekday=False, time=False):
+def get_next_bus_place(message, day=False, time=False):
     markup = place_choice_markup()
     msg = bot.send_message(message.chat.id, "Откуда едем?", reply_markup=markup, parse_mode="Markdown")
-    bot.register_next_step_handler(msg, process_set_time, weekday=weekday, time=time)
+    bot.register_next_step_handler(msg, process_set_time, day=day, time=time)
 
 
 @bot.message_handler(content_types=["text"])
-def process_set_time(message, place=False, weekday=False, time=False):
-
+def process_set_time(message, place=False, day=False, time=False):
     pieces = message.text.split(" ")
 
     if len(pieces) > 20 or len(message.text) > 60:
@@ -325,10 +520,21 @@ def process_set_time(message, place=False, weekday=False, time=False):
 
     for piece in pieces:
 
-        if piece.lower() in ["сейчас", "now", "next"]:
+        if piece.lower() in ["сейчас", "now", "next", "/now", "/next"]:
             now_requested = True
             time = now
-            weekday = today
+            day = today
+            continue
+
+        if piece.lower() in ["завтра", "tomorrow", "послезавтра"]:
+            if piece.lower() == "послезавтра":
+                tomorrow = (datetime.now().weekday() + 2) % 7
+            else:
+                tomorrow = (datetime.now().weekday() + 1) % 7
+            if tomorrow in days_by_number:
+                day = days_by_number[tomorrow]
+            else:
+                day = "weekday"
             continue
 
         if not place:
@@ -339,12 +545,12 @@ def process_set_time(message, place=False, weekday=False, time=False):
             if place:
                 continue
 
-        if not weekday:
-            for weekday_name in weekdays_names_list:  # defining weekday
+        if not day:
+            for weekday_name in weekdays_names_list:  # defining day of the week
                 if piece.startswith(weekday_name):
-                    weekday = weekdays_names_list[weekday_name]
+                    day = weekdays_names_list[weekday_name]
                     break
-            if weekday:
+            if day:
                 continue
 
         if not time:
@@ -364,34 +570,35 @@ def process_set_time(message, place=False, weekday=False, time=False):
 
         bad_pieces.append(piece)
 
-    reply = ""
-
     if now_requested and not place:
         message.text = "/next"
         get_next_bus_place(message)
     else:
+
+        reply = ""
+
         if not place:
             logging.error(f"Place was not given: {message.text}!")
             place = "Place was not given"
         else:
-            if not weekday:
-                weekday = today
+
+            if not day:
+                day = today
             if not time:
                 time = now
 
             if bad_pieces:
                 reply = reply + f"Я не знаю, что такое `{', '.join(bad_pieces)}` :(\n"
                 logging.error(f"Unknown tokens in the message: {', '.join(bad_pieces)}!")
+
             if place:
-                if (not weekday) and (not time):
+                if day == today and time == now:
                     reply = reply + f"Ближайшие рейсы от {places_rus_names_list[place]['gen']}:"
-                elif not weekday:
-                    reply = reply + f"Рейсы от {places_rus_names_list[place]['gen']} на {time} сегодня:"
                 else:
                     reply = reply + f"Рейсы от {places_rus_names_list[place]['gen']} " \
-                                    f"на {time} в {weekdays_rus_names_list[weekday]['acc']}:"
+                                    f"на {nullize(time)} в {weekdays_rus_names_list[day]['acc']}:"
 
-        get_next_bus(message, place, weekday, time, reply)
+        get_next_bus(message, place, day, time, reply)
 
 
 def markdownize_suggested(suggested_buses):
@@ -401,25 +608,25 @@ def markdownize_suggested(suggested_buses):
     return f"*{suggested_buses}*"
 
 
-def get_next_bus(message, place=False, weekday=False, time=False, reply=False):
+def get_next_bus(message, place=False, day=False, time=False, reply=False):
     if not place:
         place = code_place(message.text)
-    if not weekday:
-        weekday = define_time()[1]
+    if not day:
+        day = define_time()[1]
     if not time:
         time = define_time()[0]
 
-    if not can_be_time(time):
+    if not can_be_time(nullize(time)):
         bot.send_message(message.chat.id, time)
         return
 
     if not place in places_list:
-        get_next_bus_place(message, weekday, time)
+        get_next_bus_place(message, day, time)
 
     else:
         suggested_buses = []
 
-        for bus in schedule[weekday][place]:
+        for bus in schedule[day][place]:
             if bus > time:
                 suggested_buses.append(nullize(bus))
             if len(suggested_buses) > 4:
@@ -427,16 +634,16 @@ def get_next_bus(message, place=False, weekday=False, time=False, reply=False):
 
         if schedule_out_of_date:
             bot.send_message(message.chat.id, "*Осторожно! Это расписание может быть устаревшим.*\n"
-                             "Свежее расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
+                                              "Свежее расписание смотрите [в группе ВКонтакте](https://vk.com/dubki).",
                              parse_mode="Markdown")
 
-        if not schedule[weekday][place]:
-            bot.send_message(message.chat.id, f"К сожалению, в {weekdays_rus_names_list[weekday]['acc']} "
+        if not schedule[day][place]:
+            bot.send_message(message.chat.id, f"К сожалению, в {weekdays_rus_names_list[day]['acc']} "
                                               f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
                              reply_markup=types.ReplyKeyboardRemove())
             return
         if not suggested_buses:
-            bot.send_message(message.chat.id, f"К сожалению, в это время"
+            bot.send_message(message.chat.id, f"К сожалению, в это время в {weekdays_rus_names_list[day]['acc']} "
                                               f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
                              reply_markup=types.ReplyKeyboardRemove())
             return
@@ -451,14 +658,9 @@ def get_next_bus(message, place=False, weekday=False, time=False, reply=False):
 
 
 if __name__ == '__main__':
-    schedule = update_schedule(sched_path)
+    if update_necessary:
+        schedule = update_schedule()
+    else:
+        schedule = get_database()
     print(schedule)
-
     bot.polling(none_stop=True)
-
-"""
-TODO:
-- database support
-- report a problem
-- automatic location definer
-"""
