@@ -1,23 +1,26 @@
+import csv
+import logging
+import os
+import os.path
+import sqlite3
+import time
+from datetime import datetime, timedelta
+
+import flask
 import telebot
 from telebot import types
+
 import conf
-import csv
-import sqlite3
-import os
-from datetime import datetime, timedelta
-import logging
-import time
-from flask import Flask, request
 
 schedule_out_of_date = False  # если True, то будет выдавать предупреждение пользователю, что расписание устарело
 update_necessary = False  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
 
-logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s", level="INFO",
-                    filename="log.txt", encoding="utf-8")
-logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s", level="ERROR",
-                    filename="log.txt", encoding="utf-8")
-logging.basicConfig(format=u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s",
-                    level="WARNING", filename="log.txt", encoding="utf-8")
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+handler = logging.FileHandler("log.txt", "a", encoding="utf-8")
+formatter = logging.Formatter(u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s")
+handler.setFormatter(formatter)
+root_logger.addHandler(handler)
 
 sched_path = os.path.join("sched", "sched.txt")  # путь к txt-файлу с расписанием
 database_path = os.path.join("sched", "sched.db")  # путь к базе данных с расписанием
@@ -29,8 +32,31 @@ setback = timedelta(hours=setback_number)  # новый день
 
 amount_of_suggested_buses = 4
 
-bot = telebot.TeleBot(conf.TOKEN)
+WEBHOOK_URL_BASE = f"https://{conf.WEBHOOK_HOST}:{conf.WEBHOOK_PORT}"
+WEBHOOK_URL_PATH = f"/{conf.TOKEN}/"
 
+bot = telebot.TeleBot(conf.TOKEN, threaded=False)
+
+bot.remove_webhook()
+
+bot.set_webhook(url=WEBHOOK_URL_BASE + WEBHOOK_URL_PATH)
+
+app = flask.Flask(__name__)
+
+
+@app.route("/", methods=["GET", "HEAD"])
+def index():
+    return "ok"
+
+
+@app.route(WEBHOOK_URL_PATH, methods=["POST"])
+def webhook():
+    if flask.request.headers.get("content-type") == "application/json":
+        update = telebot.types.Update.de_json(flask.request.get_data().decode("utf-8"))
+        bot.process_new_updates([update])
+        return ""
+    else:
+        flask.abort(403)
 
 days_by_number = {
     5: "saturday",
@@ -716,31 +742,8 @@ def handle_types(message):
          reply_markup=types.ReplyKeyboardRemove())
 
 
-if __name__ == "__main__":
-    if update_necessary:
-        schedule = update_schedule()
-    else:
-        schedule = get_database()
-    print(schedule)
-
-    if "HEROKU" in list(os.environ.keys()):
-
-        server = Flask(__name__)
-
-        @server.route("/bot", methods=['POST'])
-        def getMessage():
-            bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
-            return "!", 200
-
-        @server.route("/")
-        def webhook():
-            bot.remove_webhook()
-            bot.set_webhook(
-                url="https://min-gallows.herokuapp.com/bot")  # этот url нужно заменить на url вашего Хероку приложения
-            return "?", 200
-
-        server.run(host="0.0.0.0", port=os.environ.get('PORT', 80))
-
-    else:
-        bot.remove_webhook()
-        bot.polling(none_stop=True)
+if update_necessary:
+    schedule = update_schedule()
+else:
+    schedule = get_database()
+print(schedule)
