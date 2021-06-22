@@ -271,6 +271,7 @@ def update_users(user_id):
     if not cur.fetchall():
         cur.execute("INSERT INTO users VALUES (?)", (user_id,))
         con.commit()
+        logging.error(f"New user: {user_id}")
 
 
 def can_be_hour(number):
