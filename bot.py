@@ -591,7 +591,7 @@ def get_next_bus_place(message, day=False, time=False):
 
 
 @bot.message_handler(content_types=["text"])
-def process_set_time(message, place=False, day=False, time=False, status=True):
+def process_set_time(message, place=False, day=False, time=False):
     pieces = message.text.split(" ")
 
     if len(pieces) > 20 or len(message.text) > 60:
