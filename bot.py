@@ -17,17 +17,19 @@ update_necessary = False  # если True, то загрузит расписа�
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
-handler = logging.FileHandler("log.txt", "a", encoding="utf-8")
+handler = logging.FileHandler("log.txt", "a", "utf-8")
 formatter = logging.Formatter(u"[LINE:%(lineno)d] #%(levelname)-8s [%(asctime)s]  %(message)s")
 handler.setFormatter(formatter)
 root_logger.addHandler(handler)
 
-os.chdir(os.path.dirname(os.path.realpath(__file__)))
+root_path = os.path.dirname(os.path.realpath(__file__))
 
-sched_path = os.path.join("sched", "sched.txt")  # путь к txt-файлу с расписанием
-database_path = os.path.join("sched", "sched.db")  # путь к базе данных с расписанием
-pdf_path = os.path.join("sched", "sched.pdf")  # путь к pdf-файлу с расписанием
-users_path = os.path.join("other", "users.db")  # путь к базе данных со списком пользователей
+logging.error(f"DIRECTORY_X: {os.path.dirname(os.path.realpath(__file__))}")
+
+sched_path = os.path.join(root_path, "sched", "sched.txt")  # путь к txt-файлу с расписанием
+database_path = os.path.join(root_path, "sched", "sched.db")  # путь к базе данных с расписанием
+pdf_path = os.path.join(root_path, "sched", "sched.pdf")  # путь к pdf-файлу с расписанием
+users_path = os.path.join(root_path, "other", "users.db")  # путь к базе данных со списком пользователей
 
 setback_number = 2  # количество часов, которое проходит после полуночи, прежде чем бот считает, что наступил
 setback = timedelta(hours=setback_number)  # новый день
@@ -62,6 +64,7 @@ def webhook():
         return ""
     else:
         flask.abort(403)
+
 
 days_by_number = {
     5: "saturday",
@@ -157,35 +160,36 @@ def nullize(bus):
     return numify(f"{hour}:{minutes}")
 
 
-def denullize(bus):
+def denullize(bus):  # 01:53
     if bus.find(":") < 0:
         return bus
 
-    hour = bus[:bus.find(":")]
-    minutes = bus[bus.find(":") + 1:]
+    hour = bus[:bus.find(":")]  # 01
+    minutes = bus[bus.find(":") + 1:]  # 53
 
     if int(hour) < setback_number:
-        hour = str(int(hour) + 24)
+        hour = str(int(hour) + 24)  # 25
 
-    return numify(f"{hour}:{minutes}")
+    return numify(f"{hour}:{minutes}")  # 25:53
 
 
 def sort_schedule(schedule):
     for day in days_list:
         for place in places_list:
-            schedule[day][place].sort()
+            if day in schedule and place in schedule[day]:
+                schedule[day][place].sort()
 
-            day_buses = []
-            night_buses = []
-            for i in range(len(schedule[day][place])):
-                bus = numify(schedule[day][place][i])
+                day_buses = []
+                night_buses = []
+                for i in range(len(schedule[day][place])):
+                    bus = numify(schedule[day][place][i])
 
-                if int(bus[0]) == 0 and int(bus[1]) < 4:
-                    night_buses.append(bus)
-                else:
-                    day_buses.append(bus)
+                    if int(bus[0]) == 0 and int(bus[1]) < 4:
+                        night_buses.append(bus)
+                    else:
+                        day_buses.append(bus)
 
-            schedule[day][place] = day_buses + night_buses
+                schedule[day][place] = day_buses + night_buses
 
 
 def at_arrival(row):
@@ -413,12 +417,15 @@ def place_choice_markup():
 
 def send(user_id, text, parse_mode=None, reply_markup=None):
     try:
-        message = bot.send_message(user_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+        message = bot.send_message(user_id,text,
+                                   parse_mode=parse_mode,
+                                   reply_markup=reply_markup)
         return message
     except telebot.apihelper.ApiException:
         update_users(user_id=user_id, delete=True)
         return False
-    except (ConnectionAbortedError, ConnectionResetError, ConnectionRefusedError, ConnectionError):
+    except (ConnectionAbortedError, ConnectionResetError,
+            ConnectionRefusedError, ConnectionError):
         logging.error("ConnectionError, message delayed")
         time.sleep(1)
         msg = send(user_id, text, parse_mode, reply_markup)
@@ -461,7 +468,7 @@ def report(message):
     c = types.KeyboardButton("Другое")
     markup.row(a, b, c)
 
-    msg = send(message.chat.id, "С чем именно проблема?", reply_markup=markup, parse_mode="Markdown")
+    msg = send(message.chat.id, "Выбери тему проблемы.", reply_markup=markup, parse_mode="Markdown")
     if msg:
         bot.register_next_step_handler(msg, write_report)
 
@@ -563,6 +570,15 @@ def confirm_announcement(confirmation, announcement):
         return
 
 
+@bot.message_handler(commands=["stats"])
+def announce(message):
+    if message.chat.id != conf.DEVELOPER_ID:
+        send(message.chat.id, "Эта команда доступна только разработчикам.")
+        return
+
+    msg = send(message.chat.id, "Какое объявление отправить всем пользователям?")
+
+
 @bot.message_handler(commands=["pdf"])
 def send_pdf(message):
     try:
@@ -589,16 +605,17 @@ def process_set_time(message, place=False, day=False, time=False):
 
     if len(pieces) > 20 or len(message.text) > 60:
         logging.info(f"Request too big! (from user {message.chat.id})")
-        msg = send(message.chat.id, "Лев Николаевич, не пишите больше сюда, пожалуйста. "
-                                    "Здесь нужны короткие и ёмкие запросы. Я понимаю, у нас тут Дубки, "
-                                    "вам это близко… Но надо знать меру.")
-        if not msg:
-            return
+        send(message.chat.id, "Лев Николаевич, не пишите больше сюда, пожалуйста. "
+                              "Здесь нужны короткие и ёмкие запросы. Я понимаю, у нас тут Дубки, "
+                              "вам это близко… Но надо знать меру.")
+        return
 
     now, today = define_time()
     now_requested = False
 
     bad_pieces = []
+
+    reply = ""
 
     for piece in pieces:
 
@@ -621,7 +638,7 @@ def process_set_time(message, place=False, day=False, time=False):
 
         if not place:
             for place_name in places_names_list:  # defining place
-                if piece.lower().startswith(place_name):
+                if piece.lower().startswith(place_name.lower()):
                     place = places_names_list[place_name]
                     break
             if place:
@@ -629,7 +646,7 @@ def process_set_time(message, place=False, day=False, time=False):
 
         if not day:
             for weekday_name in weekdays_names_list:  # defining day of the week
-                if piece.startswith(weekday_name):
+                if piece.lower().startswith(weekday_name.lower()):
                     day = weekdays_names_list[weekday_name]
                     break
             if day:
@@ -639,8 +656,8 @@ def process_set_time(message, place=False, day=False, time=False):
             if ":" in piece or "." in piece:  # defining time
                 if not can_be_time(piece):
                     logging.info(f"Such time doesn't exist: '{piece}'! (from user {message.chat.id})")
-                    time = "Вот в такое время автобусов точно не бывает."
-                    continue
+                    send(message.chat.id, "Вот в такое время автобусов точно не бывает.")
+                    return
                 time = denullize(numify(piece))
                 continue
             elif can_be_hour(piece):
@@ -657,8 +674,6 @@ def process_set_time(message, place=False, day=False, time=False):
         get_next_bus_place(message)
     else:
 
-        reply = ""
-
         if not place:
             logging.info(f"Place was not given: '{message.text}'! (from user {message.chat.id})")
             place = "Place was not given"
@@ -669,11 +684,13 @@ def process_set_time(message, place=False, day=False, time=False):
             if not time:
                 time = now
 
-            if bad_pieces:
-                reply = reply + f"Я не знаю, что такое `{', '.join(bad_pieces)}` :(\n"
-                logging.info(f"Unknown tokens in the message: '{', '.join(bad_pieces)}'! (from user {message.chat.id})")
+            if reply == "":
 
-            if place:
+                if bad_pieces:
+                    reply = reply + f"Я не знаю, что такое `{', '.join(bad_pieces)}` :(\n"
+                    logging.info(f"Unknown tokens in the message: '{', '.join(bad_pieces)}'! "
+                                 f"(from user {message.chat.id})")
+
                 if day == today and time == now:
                     reply = reply + f"Ближайшие рейсы от {places_rus_names_list[place]['gen']}:"
                 else:
@@ -710,11 +727,12 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
     else:
         suggested_buses = []
 
-        for bus in schedule[day][place]:
-            if bus > time:
-                suggested_buses.append(nullize(bus))
-            if len(suggested_buses) > amount_of_suggested_buses - 1:
-                break
+        if day in schedule and place in schedule[day]:
+            for bus in schedule[day][place]:
+                if bus > time:
+                    suggested_buses.append(nullize(bus))
+                if len(suggested_buses) > amount_of_suggested_buses - 1:
+                    break
 
         if schedule_out_of_date:
             msg = send(message.chat.id, "*Осторожно! Это расписание может быть устаревшим.*\nСвежее "
@@ -723,18 +741,16 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
             if not msg:
                 return
 
-        if not schedule[day][place]:
+        if (day not in schedule) or (place not in schedule[day]) or (not schedule[day][place]):
             msg = send(message.chat.id, f"К сожалению, в {weekdays_rus_names_list[day]['acc']} "
                                         f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
                        reply_markup=types.ReplyKeyboardRemove())
-            if not msg:
-                return
+            return
         if not suggested_buses:
             msg = send(message.chat.id, f"К сожалению, в это время в {weekdays_rus_names_list[day]['acc']} "
                                         f"от {places_rus_names_list[place]['gen']} автобусы не идут.",
                        reply_markup=types.ReplyKeyboardRemove())
-            if not msg:
-                return
+            return
 
         if not reply:
             logging.warning(f"Something wrong with reply message: '{reply}'. Original message: '{message.text}'.")
