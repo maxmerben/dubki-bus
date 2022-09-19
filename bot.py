@@ -4,6 +4,7 @@ import os
 import os.path
 import sqlite3
 import time
+import re
 from datetime import datetime, timedelta
 
 import flask
@@ -13,7 +14,7 @@ from telebot import types
 import conf
 
 schedule_out_of_date = False  # если True, то будет выдавать предупреждение пользователю, что расписание устарело
-update_necessary = False  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
+update_necessary = True  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
@@ -23,6 +24,17 @@ handler.setFormatter(formatter)
 root_logger.addHandler(handler)
 
 root_path = os.path.dirname(os.path.realpath(__file__))
+
+WEBHOOK_URL_BASE = f"https://{conf.WEBHOOK_HOST}:{conf.WEBHOOK_PORT}"
+WEBHOOK_URL_PATH = f"/{conf.TOKEN}/"
+
+bot = telebot.TeleBot(conf.TOKEN, threaded=False)
+
+bot.remove_webhook()
+
+bot.set_webhook(url=WEBHOOK_URL_BASE + WEBHOOK_URL_PATH)
+
+app = flask.Flask(__name__)
 
 logging.error(f"DIRECTORY_X: {os.path.dirname(os.path.realpath(__file__))}")
 
@@ -39,17 +51,6 @@ timezone = timedelta(hours=timezone_number)
 
 amount_of_suggested_buses = 4
 
-WEBHOOK_URL_BASE = f"https://{conf.WEBHOOK_HOST}:{conf.WEBHOOK_PORT}"
-WEBHOOK_URL_PATH = f"/{conf.TOKEN}/"
-
-bot = telebot.TeleBot(conf.TOKEN, threaded=False)
-
-bot.remove_webhook()
-
-bot.set_webhook(url=WEBHOOK_URL_BASE + WEBHOOK_URL_PATH)
-
-app = flask.Flask(__name__)
-
 
 @app.route("/", methods=["GET", "HEAD"])
 def index():
@@ -59,8 +60,7 @@ def index():
 @app.route(WEBHOOK_URL_PATH, methods=["POST"])
 def webhook():
     if flask.request.headers.get("content-type") == "application/json":
-        update = telebot.types.Update.de_json(flask.request.get_data().decode("utf-8"))
-        bot.process_new_updates([update])
+        bot.process_new_updates([telebot.types.Update.de_json(flask.request.get_data().decode("utf-8"))])
         return ""
     else:
         flask.abort(403)
@@ -93,6 +93,7 @@ weekdays_rus_names_list = {
 places_list = [
     "dub",
     "odi",
+    "mol",
     "slav"
 ]
 
@@ -105,6 +106,10 @@ places_rus_names_list = {
         "nom": "Одинцово",
         "gen": "Одинцова"
     },
+    "mol": {
+        "nom": "Молодёжная",
+        "gen": "Молодёжной"
+    },
     "slav": {
         "nom": "Славянка",
         "gen": "Славянки"
@@ -115,6 +120,8 @@ places_names_list = {
     "dub": "dub",
     "оди": "odi",
     "odi": "odi",
+    "мол": "mol",
+    "mol": "mol",
     "сла": "slav",
     "бул": "slav",
     "sla": "slav",
@@ -194,11 +201,18 @@ def sort_schedule(schedule):
 
 def at_arrival(row):
     for i in range(len(row)):
-        if row[i] == "по_прибытию":
-            if not odd(i):
-                logging.error(f"Some row has «по прибытию» in even columns: {row}.")
-            else:
-                row[i] = f"{row[i - 1]} (по приб.)"
+
+        try:
+            if row[i] == "по" and row[i + 1] == "прибыт.":
+                if not odd(i):
+                    logging.error(f"Some row has «по прибытию» in even columns: {row}.")
+                else:
+                    row[i] = f"{row[i - 1]} (по приб.)"
+                    row = row[:i + 1] + row[i + 2:]
+        except IndexError:
+            continue
+    print(row)
+    return row
 
 
 def get_database():
@@ -270,11 +284,11 @@ def update_schedule():
 
                 else:
 
-                    at_arrival(row)
+                    row = at_arrival(row)
 
                     for i in range(int(len(row))):
 
-                        if row[i] == "----":
+                        if row[i] == "----" or row[i] == "":
                             continue
 
                         if not odd(i):
@@ -287,6 +301,12 @@ def update_schedule():
                         elif row[i].endswith("*"):
                             row[i] = row[i][:row[i].find("*")]
                             row[i] = f"{row[i]} (до {places_rus_names_list['slav']['nom'][:4]}.)"
+                        elif row[i].endswith("\"\""):
+                            place = "mol"
+                            row[i] = row[i][:row[i].find("\"\"")]
+                        elif row[i].endswith("\""):
+                            row[i] = row[i][:row[i].find("\"")]
+                            row[i] = f"{row[i]} (до {places_rus_names_list['mol']['nom'][:5]}.)"
 
                         row[i] = denullize(numify(row[i]))
 
@@ -403,21 +423,26 @@ def code_place(message):
         return "odi"
     elif message.lower() == places_rus_names_list["dub"]["nom"].lower():
         return "dub"
+    elif message.lower() == places_rus_names_list["mol"]["nom"].lower():
+        return "mol"
     return "slav"
 
 
 def place_choice_markup():
-    markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
-    btn = {"dub": types.KeyboardButton(places_rus_names_list["dub"]["nom"]),
-           "odi": types.KeyboardButton(places_rus_names_list["odi"]["nom"]),
-           "slav": types.KeyboardButton(places_rus_names_list["slav"]["nom"])}
-    markup.row(btn["dub"], btn["odi"], btn["slav"])
+    markup = types.ReplyKeyboardMarkup(row_width=4, resize_keyboard=True)
+    btn = {
+        "dub": types.KeyboardButton(places_rus_names_list["dub"]["nom"]),
+        "odi": types.KeyboardButton(places_rus_names_list["odi"]["nom"]),
+        "mol": types.KeyboardButton(places_rus_names_list["mol"]["nom"]),
+        "slav": types.KeyboardButton(places_rus_names_list["slav"]["nom"])
+    }
+    markup.row(btn["dub"], btn["odi"], btn["mol"], btn["slav"])
     return markup
 
 
 def send(user_id, text, parse_mode=None, reply_markup=None):
     try:
-        message = bot.send_message(user_id,text,
+        message = bot.send_message(user_id, text,
                                    parse_mode=parse_mode,
                                    reply_markup=reply_markup)
         return message
@@ -482,8 +507,11 @@ def write_report(message):
 
 
 def send_report(message, topic):
-    send(conf.DEVELOPER_ID, f"REPORT #report #{topic}. Отвечайте с помощью /answer", parse_mode="Markdown")
-    bot.forward_message(conf.DEVELOPER_ID, message.chat.id, message.message_id)
+    send(conf.DEVELOPER_ID, f"REPORT #report #{topic}\n"
+                            f"User id: {message.chat.id}.\n"
+                            f"Text: '{message.text}'\n"
+                            f"Отвечайте с помощью /answer", parse_mode="Markdown")
+    #bot.forward_message(conf.DEVELOPER_ID, message.chat.id, message.message_id)
     logging.info(f"Report: #{topic} '{message.text}'! (from user {message.chat.id}, message {message.message_id})")
 
     send(message.chat.id, "Спасибо! Посмотрю, что можно сделать, подумаю и постараюсь ответить.")
@@ -501,17 +529,7 @@ def answer_report(message):
 
 
 def write_answer_report(reply):
-    if hasattr(reply.reply_to_message, "text"):
-        if hasattr(reply.reply_to_message, "forward_from") and reply.reply_to_message.forward_from:
-            report_message = reply.reply_to_message
-        else:
-            logging.error("Your answer to a report has no 'reply_to_message.forward_from' attribute.")
-            send(reply.chat.id, f"Нужно отправить ответ на пересланное сообщение.")
-            return
-    else:
-        logging.error("Your answer to a report has no 'reply_to_message' attribute.")
-        send(reply.chat.id, f"Нужно отправить ответ на пересланное сообщение.")
-        return
+    report_message = reply.reply_to_message
 
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     a = types.KeyboardButton("Да")
@@ -519,19 +537,22 @@ def write_answer_report(reply):
     markup.row(a, b)
 
     confirmation = send(reply.chat.id, "Точно?", reply_markup=markup)
-    bot.register_next_step_handler(confirmation, confirm_answer_report, reply, report_message)
+    bot.register_next_step_handler(confirmation, print_answer_report, reply, report_message)
 
 
-def confirm_answer_report(confirmation, reply, report_message):
+def print_answer_report(confirmation, reply, report_message):
     if confirmation.text == "Да":
-        send(report_message.forward_from.id, f"Помнится, ты мне написал(а) следующее:\n{report_message.text}")
-        msg = send(report_message.forward_from.id, f"Так вот, отвечаю:\n{reply.text}")
+        user_id = int(re.search("User id: ([0-9]+).", report_message.text).groups()[0])
+        report_text = re.search("Text: '([^\n]+)'", report_message.text).groups()[0]
+
+        send(user_id, f"Помнится, ты мне написал(а) следующее:\n*{report_text}*", parse_mode="Markdown")
+        msg = send(user_id, f"Так вот, отвечаю:\n*{reply.text}*", parse_mode="Markdown")
         if not msg:
             return
 
         send(reply.chat.id, "Ответ отправлен.", reply_markup=types.ReplyKeyboardRemove())
         logging.info(f"Answer: '{reply.text}' (to report {report_message.message_id} "
-                     f"from user {report_message.chat.id})")
+                     f"from user {user_id})")
     else:
         return
 
@@ -571,12 +592,12 @@ def confirm_announcement(confirmation, announcement):
 
 
 @bot.message_handler(commands=["stats"])
-def announce(message):
+def stats(message):
     if message.chat.id != conf.DEVELOPER_ID:
         send(message.chat.id, "Эта команда доступна только разработчикам.")
         return
 
-    msg = send(message.chat.id, "Какое объявление отправить всем пользователям?")
+    msg = send(message.chat.id, "Статистика пока недоступна.")
 
 
 @bot.message_handler(commands=["pdf"])
