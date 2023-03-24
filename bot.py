@@ -14,7 +14,7 @@ from telebot import types
 import conf
 
 schedule_out_of_date = False  # если True, то будет выдавать предупреждение пользователю, что расписание устарело
-update_necessary = True  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
+update_necessary = False  # если True, то загрузит расписание из sched_path (txt-файла), а не из базы данных
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
@@ -722,11 +722,13 @@ def process_set_time(message, place=False, day=False, time=False):
 
 
 def markdownize_suggested(suggested_buses):
+    for i in range(len(suggested_buses)):
+        if i == 0:
+            suggested_buses[i] = f"*{suggested_buses[i]}*"
+        else:
+            suggested_buses[i] = f"`{suggested_buses[i]}`"
     suggested_buses = " | ".join(suggested_buses)
-    x = suggested_buses.find('|')
-    if x > -1:
-        return f"*{suggested_buses[:x]}*`{suggested_buses[x:]}`"
-    return f"*{suggested_buses}*"
+    return suggested_buses
 
 
 def get_next_bus(message, place=False, day=False, time=False, reply=False):
@@ -776,9 +778,8 @@ def get_next_bus(message, place=False, day=False, time=False, reply=False):
         if not reply:
             logging.warning(f"Something wrong with reply message: '{reply}'. Original message: '{message.text}'.")
         else:
-            send(message.chat.id, reply, parse_mode="Markdown")
-        send(message.chat.id, markdownize_suggested(suggested_buses), reply_markup=types.ReplyKeyboardRemove(),
-             parse_mode="Markdown")
+            send(message.chat.id, f"{reply}\n{markdownize_suggested(suggested_buses)}",
+                reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
 
 
 @bot.message_handler(func=lambda message: True, content_types=["audio", "document", "photo", "sticker", "video",
